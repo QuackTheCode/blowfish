@@ -2,7 +2,7 @@
 title: "Vulnlab - Data Walkthrough"
 date: 2025-01-21
 draft: false
-summary: "This is my first post on my site"
+#summary: "This is my first post on my site"
 tags: ["Vulnlab", "Linux"]
 ---
 
