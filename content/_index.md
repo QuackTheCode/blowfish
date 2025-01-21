@@ -1,11 +1,1 @@
-
-#####
-{{< alert >}}
-This is a demo of the `background` layout. Switch layout
-{{< /alert >}}
-
-```bash
-npx blowfish-tools
-```
-
-{{< youtubeLite id="SgXhGb-7QbU" label="Blowfish-tools demo" >}}
+As technology improves every year so must we, the people. As our planet grows to adapt new and exciting, emerging technology which makes our lives more comfortable, convenient and cozy, little do we realize that it also opens up a vulnerability into the lives of millions. 
