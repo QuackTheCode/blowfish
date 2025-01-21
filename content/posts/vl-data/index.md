@@ -3,7 +3,7 @@ title: "Vulnlab - Data Walkthrough"
 date: 2025-01-21
 draft: false
 summary: "This is my first post on my site"
-tags: ["Vulnlab", "Windows"]
+tags: ["Vulnlab", "Linux"]
 ---
 
 ## Port Scanning
@@ -11,352 +11,282 @@ tags: ["Vulnlab", "Windows"]
 An initial Rustscan scan reveals:
 
 ```bash
-rustscan -a 10.10.110.29 --ulimit 5000 --
+rustscan -a 10.10.94.22 --ulimit 5000 --
 ```
 
+![](Data-Rustscan.png)
 
-![](Escape-Rustscan.png)
-
-Only the RDP port appears to be open. A more detailed Nmap scan shows the following information:
+Two ports appear to be open. A more detailed Nmap scan shows the following information:
 
 ```bash
-nmap -Pn -p3389 -A -T4 10.10.110.29
+nmap -Pn -A 10.10.94.22
 ```
 
+![](Data-Nmap.png)
 
-![](Escape-NmapScan.png)
+Only SSH and a port on 3000 appear to be running (indicated as a web server by various HTTP responses such as 302 Found). Since SSH is not typically the way in without credentials or a private key, it's best to check out the web server first.
+## Web Server Enumeration
 
-It seems RDP is the only port open.
+Navigating to the site in a browser reveals a Grafana login page:
 
-## RDP Enumeration
+![](Data-Grafana.png)
 
-Nmap has some RDP enumeration scripts that can gather more information:
+Searching for default credentials reveals them to be "admin:admin":
+
+![](Data-Grafana-Default.png)
+
+However, this proves unsuccessful. Attempting other weak credentials also proves unsuccessful such as:
+
+- admin:password
+- grafana:grafana
+- admin:grafana
+
+Since brute forcing is typically a last resort, it seems credentials are not the way in yet. Checking the source code for any mention of a version returns a version of 8.0.0:
+
+![](Data-Version-8.png)
+
+## Grafana Version Enumeration
+
+Searching for any vulnerabilities/exploits relating to this version returns a few results:
+
+![](Data-Grafana-LFI.png)
+
+One thing in common between these links is a CVE. Researching this vulnerability reveals it to be a path traversal vulnerability and, most importantly, it is pre-auth meaning no login is required:
+
+{{< github repo="taythebot/CVE-2021-43798" >}}
+
+
+## CVE-2021-43798 Exploitation
+
+Reading through the vulnerability, there is a public API endpoint allowing the viewing of plugin assets by providing a plugin ID and specifying a file path via `<grafana>/public/app/plugins/panel/pluginId`. In the PoC above, cURL is used to grab these files:
 
 ```bash
-nmap -p 3389 --script rdp-enum-encryption 10.10.110.29 -Pn
+curl --path-as-is http://localhost:3000/public/plugins/alertlist/../../../../../../../../etc/passwd
 ```
 
+Attempting this PoC against the machine results in success:
 
-![](Escape-NLA.png)
-It shows it supports NLA as well as other information like early user auth, which supports authenticating users before the session is initialized.
+![](Data-Etc-Passwd.png)
 
-Trying a standard RDP connection results in it asking for a domain name:
+It works and various files can be read. Looking at the output of /etc/passwd, there are not many users (only root and grafana) with root really being the only user with a shell, indicating it may be a container of some kind, or just poorly managed.
+
+Attempting to read the /etc/shadow file results in just HTML being returned:
+
+![](Data-Shadow.png)
+### Dumping Interesting Files
+
+Reading further down the GitHub page, it states that Grafana uses a sqlite3 database stored under `/var/lib/grafana/grafana.db`. It also states you can dump Grafana configuration from `<grafana>/conf/defaults.ini`. 
+
+{{< alert >}}
+**Warning!** To download the binary database file, you must specify `--output [FILE]` or cURL will not work.
+{{< /alert >}}
+
+
+Downloading both results in success:
 
 ```bash
-xfreerdp /v:10.10.110.29 /dynamic-resolution
+curl --path-as-is http://10.10.94.22:3000/public/plugins/alertlist/../../../../../../../../etc/passwd
+curl --path-as-is http://10.10.94.22:3000/public/plugins/alertlist/../../../../../conf/defaults.ini
 ```
 
+![](Data-Files-Get.png)
 
-![](Escape-XfreeRDP.png)
-Since NLA is use, a connection was made by disabling NLA:
+Checking the default configuration file for anything juicy (creds, usernames, hashes, subdomains, etc..) results in nothing:
+
+![](Data-Default-Ini.png)
+## SQLite3 Enumeration
+
+Opening the sqlite3 database and running the `.tables` command shows some interesting results:
+
+![](Data-Tables.png)
+
+Then, after dumping the interesting `user` table, some hashes appear to be present for two users:
+
+- admin
+- boris
+
+![](Data-Pass-Hashes.png)
+## Cracking Hashes
+
+Again, on the same GitHub, it states that Grafana encrypts all passwords using AES-256-CBC using a `secret_key` config file.. Searching around, there is a tool called Grafana2Hashcat that converts them into a format that Hashcat can use:
+
+{{< github repo="iamaldi/grafana2hashcat" >}}
+
+
+After running it on the hashes:
 
 ```bash
-xfreerdp /v:10.10.110.29 /dynamic-resolution -sec-nla
+python3 grafana2hashcat.py grafana_hashes.txt
 ```
 
+![](Data-Hashcat-Grafana.png)
 
-![](Escape-RDP.png)
-An RDP session opens, indicating it is a kiosk with standard user (KioskUser0) and no password. As a side note, login would now be possible with NLA due to knowing credentials:
+The two hashes get outputted. Now, Hashcat can be run against them with the standard `rockyou` wordlist:
 
 ```bash
-xfreerdp /v:10.10.110.29 /dynamic-resolution /u:KioskUser0
+hashcat -m 10900 crackme.txt /usr/share/wordlists/rockyou.txt
 ```
 
-## Initial Access Enumeration
+![](Data-CrackedBlur.png)
 
-After logon, a simple screen appears with a background image and text:
+Now we have credentials! With these, SSH can be attempted as the `boris` user which results in a successful flag and the user flag can be grabbed:
 
+![](Data-Boris.png)
+## Post Exploitation Enumeration
 
-![](Escape-Expo.png)
-Various shortcuts and methods were attempted to get more access such as hitting CTRL+ALT+DEL which does work:
+After gaining access, checking SUDO permissions shows something interesting:
 
+![](Data-Docker-Exec.png)
 
-![](Escape-CTRLALTDEL.png)
-Using Google Translate, it reads as follows (top to bottom):
+The boris user can run `docker exec` with a wildcard afterwards as the root user. Another thing to check from earlier with the `/etc/passwd`, the previous passwd file did not contain the boris user but did have a grafana user, while the one present via SSH contains `boris` but not `grafana`:
 
-- Lock
-- Log Out
-- Change Password
-- Task Manager
+![](Data-Passwd-Boris.png)
 
-The lock, logout and change password options are of no interest, but task manager may be useful. Attempting to open Task Manager does not work sadly.
+This indicates a high likelihood of Grafana being run in a container (as well as the fact docker seems to be installed here). 
+## Docker Exec
 
-Moving on, a useful guide was hitting the Windows key produces the standard Windows menu:
+After reading around and learning about `docker exec`, it appears most of the commands need the hostname of the docker container:
 
+![](Data-Container-Name.png)
 
-![](Escape-Menu.png)
+Using the LFI from earlier, the hostname of the Grafana container can be exfiltrated from `/etc/hostname`:
 
-Trying more suggestions from [HackTricks](https://book.hacktricks.wiki/en/hardware-physical-access/escaping-from-gui-applications.html#bypassing-path-restrictions), hitting Windows+F opened up a feedback window:
+![](Data-Etc-Hostname.png)
 
+With the hostname, a test command can be ran to gain an interactive shell:
 
-![](Escape-Feedback.png)
-Clicking into Settings showed some possible links at the bottom that may open a browser, but they did not work in this scenario:
-
-
-![](Escape-Links.png)
-
-Going back to the Windows menu, Microsoft Edge can be opened:
-
-
-![](Escape-Edge.png)
-
-## Edge Breakout Techniques
-
-
-Searching around, [HackTricks](https://book.hacktricks.wiki/en/hardware-physical-access/escaping-from-gui-applications.html#accessing-filesystem-from-the-browser) has a section on accessing the file system from the browser with places to look as well as a good blog by [NVISO](https://blog.nviso.eu/2022/05/24/breaking-out-of-windows-kiosks-using-only-microsoft-edge/) which details breakouts using MS Edge.
-
-Attempting to navigate to interesting directories such as `C:\Windows\System32` results in success and the file system can be navigated:
-
-
-![](Escape-System32.png)
-
-Depending on whether the Edge instance running now is locked down or not, another MSEdge window can be opened by trying to use various protocols in the URL bar such as `ftp://` which prompts Windows to ask what program should be used to open it:
-
-
-![](Escape-FTP.png)
-
-It appears to allow Internet Explorer, Edge and the MS Store to be opened for FTP files:
-
-
-![](Escape-SecondWindow.png)
-
-The second window may now be completely unrestricted if any were in place to begin with.
-
-Since access is allowed to the System32 directory seen above, a command prompt or PowerShell window can be attempted to be ran:
-
-
-![](Escape-PowerShell.png)
-
-Unfortunately, an error occurs stating that the operation was cancelled due to system limitations, likely due to the kiosk mode not allowing execution of unwanted programs such as PowerShell and CMD:
-
-
-![](Escape-ErrorPS.png)
-
-In Edge, you can potentially open a Windows Explorer window by clicking the folder icon next to any of the files that have been downloaded which proves successful:
-
-
-![](Escape-Explorer.png)
-
-Trying to navigate to places on the file system in Explorer proves unsuccessful however, as an error message appears:
-
-
-![](Escape-ExplorerError.png)
-
-The error is similar to before - stating that it has been blocked and happens for every directory including our own desktop or home directory.
-
-As a recap:
-
-- File system navigation is possible through a MS Edge browser
-- Explorer window is possible, but only in the Download directory
-
-Testing the right click, it also appears to be disabled, not allowing accessing to the context menu. However, shortcuts appear to be working as CTRL+C/CTRL+V is possible to duplicate files in the current directory:
-
-
-![](Escape-CopyPaste.png)
-
-## Command Line Access
-
-Remembering a video from John Hammond almost 3 years ago about kiosk breakouts, there was a simple technique - simply rename the `powershell.exe` to `msedge.exe` or an already allowed/whitelisted program.
-
-{{< youtubeLite id="aBMvFmoMFMI" label="" >}}
-
-If the system is only matching on the name of the executable itself and not the full path, it will allow execution of any renamed file.
-
-Since MS Edge is allowed to run, the `cmd.exe` can be renamed to `msedge.exe` in the Downloads folder using the F2 keyboard shortcut:
-
-
-![](Escape-CMD.png)
-
-Command line access is now present.
-
-## CLI Enumeration
-
-Running the `whoami` command, we are still the kioskuser0:
-
-
-![](Escape-whoami.png)
-
-Checking our current user's desktop reveals a flag:
-
-
-![](Escape-UserTXT.png)
-
-Attempting to look at the Administrator's folder results in an access denied:
-
-
-![](Escape-AccessDenied.png)
-
-Looking around for a bit in directories like:
-
-- `C:\Windows\Tasks`
-- `C:\Temp`
-- `C:\Windows\Temp`
-- `C:\Users\Public`
-
-Resulted in nothing interesting. Looking at the base C: drive also results in nothing interesting:
-
-
-![](Escape-CDrive.png)
-
-Or does it.......? One thing to be aware of is there may be hidden folders that are lurking that will not appear from a simple `dir` command. To show them in PowerShell:
-
-```powershell
-Get-ChildItem C:\ -Hidden
+```bash
+docker exec -it [CONTAINER-NAME] /bin/bash
 ```
 
+![](Data-IT.png)
 
-![](Escape-Admin.png)
+This spawns an interactive shell on the Docker container as the "grafana" user and the `/etc/passwd` contents are the same as found via LFI before. Reading the man page and [Docker documentation](https://docs.docker.com/reference/cli/docker/container/exec/)) shows some interesting options:
 
-A hidden `_admin` directory appears and did not show up due to the attributes being `d--h--` which indicate a directory and hidden.
+![](Data-Options.png)
 
-## Admin Folder Enumeration
+Two options stand out to me:
 
-Enumerating the admin folder shows an installers and a passwords folder, but these both appear to be empty:
+- `--privileged`
+- `--user`
 
+The `--privileged` option provides various capabilities to the container:
 
-![](Escape-Empty.png)
+![](Data-Privileged.png)
 
-The only non-empty file/folder in this directory is the `profiles.xml` file. Reading the contents reveals a profile name, username and password with a comment stating "Remote Desktop Plus":
+Attempting to run Docker exec with the `-u` option first and specifying `root` proves successful and access is gained as the root user:
 
+![](Data-Root-Container.png)
 
-![](Escape-RDPPlusBlur.png)
+Since we have root access, the `--privileged` option may not be needed. Further research on how to escape Docker containers with root access revealed a [blog](https://www.panoptica.app/research/7-ways-to-escape-a-container) with various ways:
 
-Doing research, it appears to be a legitimate program:
+![](Data-Escapes.png)
+## Docker Escape
 
+These techniques have some minimal Linux capabilities that must be available. To enumerate these, the `/proc/self/status` can be read and grepped for `Cap` which returns:
 
-![](Escape-Plus.png)
-
-## Remote Desktop Plus
-
-Running a PowerShell one-liner, we can search for Remote Desktop Plus on the system:
-
-```powershell
-Get-ChildItem -Path C:\ -Filter "Remote Desktop Plus" -Recurse -ErrorAction SilentlyContinue -Force
+```bash
+cat /proc/self/status | grep Cap
 ```
 
+![](Data-Capabilities.png)
 
-![](Escape-ProgramFiles.png)
+These capabilities are as follows:
 
-Navigating to the directory shows an EXE available. Running it creates a popup for the program itself:
+- Effective capabilities (CapEff)
+- Permitted capabilities (CapPrm)
+- Inherited capabilities (CapInh)
+- Ambient capabilities (CapAmb)
+- Bounding set (CapBnd)
 
+The values are not in human readable form, but can be easily translated to certain capabilities via a simple Python script I wrote:
 
-![](Escape-RDPPlus2.png)
+```python
+# List of all capabilities and their bit positions
+capabilities = {
+    0: "CAP_CHOWN",                   # 0
+    1: "CAP_DAC_OVERRIDE",            # 1
+    2: "CAP_DAC_READ_SEARCH",         # 2
+    3: "CAP_FOWNER",                  # 3
+    4: "CAP_SETPRIORITY",             # 4
+    5: "CAP_SYS_ADMIN",               # 5
+    6: "CAP_SYS_BOOT",                # 6
+    7: "CAP_SYS_NICE",                # 7
+    8: "CAP_SYS_RESOURCE",            # 8
+    9: "CAP_SYS_TIME",                # 9
+    10: "CAP_SYS_TTY_CONFIG",         # 10
+    11: "CAP_MKNOD",                  # 11
+    12: "CAP_AUDIT_WRITE",            # 12
+    13: "CAP_AUDIT_CONTROL",          # 13
+    14: "CAP_MAC_OVERRIDE",           # 14
+    15: "CAP_MAC_ADMIN",              # 15
+    16: "CAP_SYSLOG",                 # 16
+    17: "CAP_WAKE_ALARM",             # 17
+    18: "CAP_BLOCK_SUSPEND",          # 18
+    19: "CAP_AUDIT_READ",             # 19
+    20: "CAP_PERFMON",                # 20
+    21: "CAP_SYS_ADMIN",              # 21
+    22: "CAP_SYS_PTRACE",             # 22
+    23: "CAP_SYS_PACCT",              # 23
+    24: "CAP_SYS_ADMIN2",             # 24
+    25: "CAP_SYS_EPOLL",              # 25
+    26: "CAP_SYS_CPU",                # 26
+    27: "CAP_SYS_INIT",               # 27
+    28: "CAP_SYS_CHROOT",             # 28
+    29: "CAP_SYS_AUDIT",              # 29
+    30: "CAP_SYS_VMS",                # 30
+    31: "CAP_SYS_VM",                 # 31
+    32: "CAP_SYS_ALL",                # 32
+    33: "CAP_SYS_KILL",               # 33
+    34: "CAP_SYSLINUX_KILL",          # 34
+    35: "CAP_EXIT"                    # 35
+}
 
-There is an option to "Manage profiles" which allows you to import profiles. Since it opens Explorer.exe to search for the file, we cannot navigate to the `C:\_admin` directory.
+def decode_capabilities(cap_value_hex):
+    # Convert hexadecimal string to integer
+    cap_value = int(cap_value_hex, 16)
+    
+    # Iterate through all capabilities and check if the corresponding bit is set
+    for bit, capability in capabilities.items():
+        if cap_value & (1 << bit):
+            print(f"Bit {bit}: {capability}")
 
-To solve it, we can copy the profiles.xml to the Downloads directory which we do have access to in Explorer:
-
-
-![](Escape-ProfilesXML.png)
-
-After importing the profile, it appears in the profiles section, but the password is protected:
-
-
-![](Escape-Import.png)
-
-## Extracting Credentials
-
-One thing I like to do is search GitHub for the program and see what comes up:
-
-![](Escape-Snatcher.png)
-
-{{< github repo="Yeeb1/SharpRDPlusSnatcher" >}}
-
-There appears to be a program that exploits it by decrypting temporary `.rdp` files in a temp directory. After fighting with Visual Studio, .NET Framework and SDK versions, the compiled EXE now runs:
-
-
-![](Escape-Sharp.png)
-
-To execute locally, I spun up a Windows VM and transferred the `profiles.xml` over to it. Once there, Remote Desktop Plus was downloaded which resulted in a `rdp.exe` file as above.
-
-While SharpRDPlusSnatcher was running, the profile was imported and the "Connect" button was clicked:
-
-
-![](Escape-Twisting3021Blur.png)
-
-A cleartext password is returned.
-
-## Privilege Escalation
-
-While the profile name was "admin", it's good to confirm if there is a user of this name or similiar like "Administrator":
-
-```powershell
-net user
+# Example Usage:
+cap_value_hex = "3fffffffff"  # Replace this with the capability hex string
+decode_capabilities(cap_value_hex)
 ```
 
+This script essentially maps the various capabilities to certain bits, translates the hexadecimal into an integer and checks if the corresponding bit is set (in this case, for value 3ffffffff) and prints out the capabilities:
 
-![](Escape-AdminUser.png)
+![](Data-Sys-Admin.png)
 
-Since this is a perfect match, it can be tested for password re-use, although the RDP was for the localhost anyways so it likely works. Before continuing, we can check if the `admin` user is in the Administrators group:
+As you can see, the values present as root in the Docker container translate to having all privileges which makes sense. There is also a [StackOverflow post](https://stackoverflow.com/questions/58924511/why-is-granting-the-sys-admin-privilege-for-a-docker-container-bad) asking why it is bad for a Docker container to have it, stating it is essentially root access to the host.
 
-```powershell
-net user admin
+{{< alert >}}
+**Warning!** While you can just run the command to mount the file system and perform privilege escalation, it's always good to gain an understanding.
+{{< /alert >}}
+
+The blog continues and states the commands to escape the container are:
+
+```bash
+mount /dev/[DEVICE-FILE] /mnt
+ls /mnt
 ```
 
+To find the device file, many commands can be ran, including `fdisk -l`:
 
-![](Escape-LocalAdmin.png)
-
-To get an elevated CMD prompt as the new admin user, `runas` can be used:
-
-```powershell
-runas /user:admin cmd
+```bash
+fdisk -l
 ```
 
+![](Data-Vda1.png)
 
-![](Escape-AdminShell.png)
+Now, this device can be mounted:
 
-## Root Flag
-
-Searching for the root flag in the Desktop folder for `admin` results in no luck:
-
-
-![](Escape-NoAdminFlag.png)
-
-Attempting to view the Administrator folder results in an access denied error:
-
-
-![](Escape-Denied.png)
-
-Checking the privileges via `whoami /all` reveals that the BUILTIN\\Administrators group has the attribute of "Group used for deny only":
-
-
-![](Escape-DenyOnly.png)
-
-Performing some research on my local machine, I opened a terminal and ran the same command and got the same results:
-
-
-![](Escape-DenyAdmins.png)
-
-However, running the command as administrator prompted a UAC, but afterwards, it appeared full permissions were present:
-
-
-![](Escape-FullAdmin.png)
-
-This lead me to think about a potential UAC bypass of some sort. Further research, I came across a [blog post](https://harshit3.medium.com/bypassing-windows-uac-2d9f232702d7) that describes tokens well and talks about UAC preventing administrative tasks since it is using a filtered token.
-
-## UAC Bypass
-
-One way to confirm UAC is present on the system is via a one-liner:
-
-```powershell
-REG QUERY HKEY_LOCAL_MACHINE\Software\Microsoft\Windows\CurrentVersion\Policies\System\ /v ConsentPromptBehaviorAdmin
+```bash
+mkdir /mnt/pwned
+mount /dev/xvda1 /mnt/pwned
 ```
 
+![](Data-Pwned.png)
 
-![](Escape-RegQuery.png)
-
-The value of 5 means that it prompts for consent when running as an administrator, meaning UAC is present.
-
-Since GUI access is present via RDP, an easy way to trigger a UAC prompt is via:
-
-```powershell
-start-process cmd.exe -verb runas
-```
-
-This starts a new process (CMD) and specifies that the process is started with elevated privileges (run as administrator). Since UAC is on for "running as administrator" actions, it appears:
-
-![](Escape-UAC.png)
-
-After clicking Yes, a new CMD opens with full administrative privileges:
-
-![](Escape-Owned.png)
