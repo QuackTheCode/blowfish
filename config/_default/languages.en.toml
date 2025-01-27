@@ -9,7 +9,7 @@ title = "QuackTheCode"
   isoCode = "en"
   rtl = false
   dateFormat = "2 January 2006"
-  logo = "blowfish_logo_transparent.png"
+  #logo = "duck-modified.png"
   # secondaryLogo = "img/secondary-logo.png"
   # description = "My awesome website"
   copyright = "Copyright © 2025 - QuackTheCode"
@@ -18,7 +18,7 @@ title = "QuackTheCode"
  [params.author]
    name = "James"
 #   email = "youremail@example.com"
-   image = "fish.png"
+   image = "jeff.jpeg"
 #   imageQuality = 96
    headline = "Web App Hacker, IoT Enthusiast"
 #   bio = "A little bit about you"
