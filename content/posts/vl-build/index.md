@@ -44,8 +44,9 @@ Attempting to access rshell also proves unsuccessful:
 
 ![](Build-RSH.png)
 
->[!info]
->This is because both of these services base authentication off the use of a `.rhosts` file.
+{{< alert >}}
+This is because both of these services base authentication off the use of a `.rhosts` file.
+{{< /alert >}}
 
 However, Rsync provides some more information. Attempting to connect to port 873 with Netcat results in a banner being returned:
 
@@ -81,8 +82,10 @@ The share includes a Jenkins archive file which could contain useful information
 rsync -av rsync://10.10.75.188/backups .
 ```
 
->[!warning]
->This will take a relatively long time as the file size is very large!
+{{< alert >}}
+This will take a relatively long time as the file size is very large!
+{{< /alert >}}
+
 ## Jenkins File Analysis
 
 After extracting via the `tar -xvf jenkins.tar.gz` command, a `jenkins_configuration` directory is created, containing a ton of files:
